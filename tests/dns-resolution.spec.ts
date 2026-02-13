@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import dns from 'dns';
 import { promisify } from 'util';
+import { Resolver } from 'dns';
 
 const resolve4 = promisify(dns.resolve4);
 const resolve6 = promisify(dns.resolve6);
@@ -8,6 +9,39 @@ const resolveCname = promisify(dns.resolveCname);
 const resolveMx = promisify(dns.resolveMx);
 const resolveTxt = promisify(dns.resolveTxt);
 const resolveNs = promisify(dns.resolveNs);
+
+// DNSSEC Algorithm names
+const DNSSEC_ALGORITHMS: Record<number, string> = {
+  5: 'RSA/SHA-1',
+  7: 'RSASHA1-NSEC3-SHA1',
+  8: 'RSA/SHA-256',
+  10: 'RSA/SHA-512',
+  13: 'ECDSA/P-256/SHA-256',
+  14: 'ECDSA/P-384/SHA-384',
+  15: 'Ed25519',
+  16: 'Ed448',
+};
+
+// Helper to query DNSSEC records using dig command
+async function queryDNSSEC(domain: string, recordType: string): Promise<string> {
+  const { exec } = await import('child_process');
+  return new Promise((resolve, reject) => {
+    exec(`dig ${domain} ${recordType} +short`, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+async function queryDNSSECFull(domain: string, recordType: string): Promise<string> {
+  const { exec } = await import('child_process');
+  return new Promise((resolve, reject) => {
+    exec(`dig ${domain} ${recordType} +dnssec +noall +answer`, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    });
+  });
+}
 
 // Configuration - Update these values for your domain
 const TEST_DOMAIN = process.env.TEST_DOMAIN || 'example.com';
@@ -206,4 +240,140 @@ test.describe('Subdomain Tests', () => {
       }
     });
   }
+});
+
+test.describe('DNSSEC Verification', () => {
+  test('DNSKEY record exists', async () => {
+    test.skip(TEST_DOMAIN === 'example.com', 'TEST_DOMAIN not configured');
+
+    const dnskey = await queryDNSSEC(TEST_DOMAIN, 'DNSKEY');
+
+    if (!dnskey) {
+      test.skip(true, 'DNSSEC not enabled for this domain');
+    }
+
+    expect(dnskey.length).toBeGreaterThan(0);
+    console.log(`DNSKEY record found`);
+  });
+
+  test('DNSKEY has valid algorithm', async () => {
+    test.skip(TEST_DOMAIN === 'example.com', 'TEST_DOMAIN not configured');
+
+    const dnskey = await queryDNSSEC(TEST_DOMAIN, 'DNSKEY');
+
+    if (!dnskey) {
+      test.skip(true, 'DNSSEC not enabled for this domain');
+    }
+
+    // DNSKEY format: flags protocol algorithm public-key
+    // Example: 257 3 13 base64key...
+    const lines = dnskey.split('\n');
+    for (const line of lines) {
+      const parts = line.split(' ');
+      if (parts.length >= 3) {
+        const flags = parseInt(parts[0]);
+        const protocol = parseInt(parts[1]);
+        const algorithm = parseInt(parts[2]);
+
+        // Flags should be 256 (ZSK) or 257 (KSK)
+        expect([256, 257]).toContain(flags);
+        // Protocol should always be 3
+        expect(protocol).toBe(3);
+        // Algorithm should be a known secure algorithm
+        expect(Object.keys(DNSSEC_ALGORITHMS).map(Number)).toContain(algorithm);
+
+        const algoName = DNSSEC_ALGORITHMS[algorithm] || 'Unknown';
+        console.log(`DNSKEY: flags=${flags}, algorithm=${algorithm} (${algoName})`);
+      }
+    }
+  });
+
+  test('RRSIG signatures are present', async () => {
+    test.skip(TEST_DOMAIN === 'example.com', 'TEST_DOMAIN not configured');
+
+    const rrsigOutput = await queryDNSSECFull(TEST_DOMAIN, 'A');
+
+    if (!rrsigOutput.includes('RRSIG')) {
+      // Try SOA if A doesn't have RRSIG
+      const soaOutput = await queryDNSSECFull(TEST_DOMAIN, 'SOA');
+      if (!soaOutput.includes('RRSIG')) {
+        test.skip(true, 'No RRSIG signatures found');
+      }
+      expect(soaOutput).toContain('RRSIG');
+      console.log('RRSIG signature found for SOA record');
+    } else {
+      expect(rrsigOutput).toContain('RRSIG');
+      console.log('RRSIG signature found for A record');
+    }
+  });
+
+  test('DNSSEC signatures are valid (not expired)', async () => {
+    test.skip(TEST_DOMAIN === 'example.com', 'TEST_DOMAIN not configured');
+
+    const rrsigOutput = await queryDNSSECFull(TEST_DOMAIN, 'SOA');
+
+    if (!rrsigOutput.includes('RRSIG')) {
+      test.skip(true, 'No RRSIG signatures found');
+    }
+
+    // RRSIG contains expiration date in format YYYYMMDDHHMMSS
+    const expirationMatch = rrsigOutput.match(/(\d{14})\s+(\d{14})\s+(\d+)\s+/);
+
+    if (expirationMatch) {
+      const expiration = expirationMatch[1];
+      const keyTag = expirationMatch[3];
+
+      const expDate = new Date(
+        parseInt(expiration.slice(0, 4)),
+        parseInt(expiration.slice(4, 6)) - 1,
+        parseInt(expiration.slice(6, 8)),
+        parseInt(expiration.slice(8, 10)),
+        parseInt(expiration.slice(10, 12)),
+        parseInt(expiration.slice(12, 14))
+      );
+
+      const now = new Date();
+      expect(expDate.getTime()).toBeGreaterThan(now.getTime());
+
+      console.log(`RRSIG key tag: ${keyTag}`);
+      console.log(`RRSIG expires: ${expDate.toISOString()}`);
+      console.log(`Days until expiration: ${Math.floor((expDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))}`);
+    }
+  });
+
+  test('DNSSEC chain of trust (DS record at parent)', async () => {
+    test.skip(TEST_DOMAIN === 'example.com', 'TEST_DOMAIN not configured');
+
+    // Query DS record from parent zone
+    const dsOutput = await queryDNSSEC(TEST_DOMAIN, 'DS');
+
+    if (!dsOutput) {
+      // DS might not be visible from all resolvers, try with trace
+      const dnskeyOutput = await queryDNSSEC(TEST_DOMAIN, 'DNSKEY');
+      if (dnskeyOutput) {
+        console.log('DNSKEY exists but DS record not directly queryable (may be at parent zone)');
+        test.skip(true, 'DS record not directly queryable');
+      } else {
+        test.skip(true, 'DNSSEC not enabled');
+      }
+    }
+
+    // DS record format: key-tag algorithm digest-type digest
+    const parts = dsOutput.split(' ');
+    if (parts.length >= 4) {
+      const keyTag = parts[0];
+      const algorithm = parseInt(parts[1]);
+      const digestType = parseInt(parts[2]);
+
+      const digestTypes: Record<number, string> = {
+        1: 'SHA-1',
+        2: 'SHA-256',
+        4: 'SHA-384',
+      };
+
+      console.log(`DS record: key-tag=${keyTag}, algorithm=${algorithm}, digest=${digestTypes[digestType] || digestType}`);
+    }
+
+    expect(dsOutput.length).toBeGreaterThan(0);
+  });
 });

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNS Test Site</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: #a855f7;
+        }
+        .status {
+            background: rgba(168, 85, 247, 0.2);
+            border: 1px solid #a855f7;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background: #22c55e;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .info {
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+        .info p { margin: 0.5rem 0; }
+        .record-type {
+            display: inline-block;
+            background: #a855f7;
+            color: #fff;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin: 0.25rem;
+        }
+        #hostname, #timestamp { color: #a855f7; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DNS Test Site</h1>
+        <div class="status">
+            <span class="status-indicator"></span>
+            <strong>DNS Resolution Successful</strong>
+            <p style="margin-top: 0.5rem; color: #94a3b8;">
+                Your domain is correctly pointing to this site
+            </p>
+        </div>
+
+        <div class="info">
+            <p>Hostname: <span id="hostname"></span></p>
+            <p>Loaded at: <span id="timestamp"></span></p>
+        </div>
+
+        <div style="margin-top: 2rem;">
+            <p style="margin-bottom: 0.5rem; color: #94a3b8;">Supported DNS Record Types:</p>
+            <span class="record-type">A</span>
+            <span class="record-type">AAAA</span>
+            <span class="record-type">CNAME</span>
+            <span class="record-type">NS</span>
+            <span class="record-type">MX</span>
+            <span class="record-type">TXT</span>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('hostname').textContent = window.location.hostname;
+        document.getElementById('timestamp').textContent = new Date().toISOString();
+    </script>
+</body>
+</html>
